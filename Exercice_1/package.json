@@ -1,0 +1,13 @@
+{
+  "scripts": {
+    "test": "mocha -r ts-node/register -P 3-ECS/tsconfig.mocha.node.json 3-ECS/tests/**/*.ts"
+  },
+  "devDependencies": {
+    "@types/chai": "^4.1.0",
+    "@types/mocha": "^2.2.46",
+    "chai": "^4.1.2",
+    "mocha": "^4.1.0",
+    "ts-node": "^4.1.0",
+    "typescript": "^2.6.2"
+  }
+}
