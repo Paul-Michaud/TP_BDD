@@ -49,23 +49,17 @@ export class Scene {
       const scene = new Scene(description);
       Scene.current = scene;
 
-      Object.keys(description).forEach(objName => {
-        Object.keys(description[objName].components).forEach(compName => {
-          //Setup de chaque composant de chaque objet de la scène
-          //La fonction setup renvoie une promsesse qu'on stocke 
-          //dans le tableau setupPromise.
-          setupPromises.push(Scene.current.findObject(objName).getComponent(compName).setup(description[objName].components[compName]))
-        });
-        
-        //Ensuite on regarde si les objets on des enfants, si oui
-        //on setup ses composants
-        Object.keys(description[objName].children).forEach(childName => {
-          Object.keys(description[objName].children[childName].components).forEach(childCompName => {
-            setupPromises.push((Scene.current.findObject(objName).getChild(childName) as IEntity).getComponent(childCompName).setup(description[objName].children[childName].components[childCompName]))
-          });
-        });
-      });
+      for(let obj in description) {
+        for(let comp in description[obj].components) {
+          //On setup les composants de l'objets
+          setupPromises.push(Scene.current.findObject(obj).getComponent(comp).setup(description[obj].components[comp]));
+        }
 
+        for(let child in description[obj].children) {
+          //Puis on setup récursivement ses enfants
+          setupPromises.push(Scene.current.setupChildrenRecurse(Scene.current.findObject(obj).getChild(child) as Entity, description[obj].children[child]));
+        }
+      }
       //Une fois que toutes les promesses sont résolues on retourne la scène actuelle
       Promise.all(setupPromises).then(function () {
         resolve(Scene.current);
@@ -73,44 +67,93 @@ export class Scene {
     });
   }
 
-  private constructor(description: ISceneDesc) {
-    //Pour chaque objet de la scène on créé une entitée
-    //puis on ajoute chaque composants
-    Object.keys(description).forEach(objName => {
-      this.scenes[objName] = new Entity();
-      Object.keys(description[objName].components).forEach(compName => {
-        this.scenes[objName].addComponent(compName);
-      })
+  //Setup récusif des enfants qui retourne une promesse résolue quand terminée
+  setupChildrenRecurse(child: Entity, desc: IEntityDesc): Promise<any> {
+    let setupPromises = new Array();
+    return new Promise<any>((resolve, reject) => {
+      for(let comp in desc.components) {
+        child.getComponent(comp).setup(desc.components[comp]);
+      }
+      
+      for(let childOfChild in child.children) {
+        this.setupChildrenRecurse(child.getChild(childOfChild) as Entity, desc.children[childOfChild])
+      }
 
-      //Si l'objet a des enfants, on configure ses composants
-      //puis on "ajoute" l'enfant au parent avec la fonction addChild
-      Object.keys(description[objName].children).forEach(childName => {
-        let myChild = new Entity();
-        Object.keys(description[objName].children[childName].components).forEach(childCompName => {
-          myChild.addComponent(childCompName);
-        });
-        this.scenes[objName].addChild(childName, myChild);
+      Promise.all(setupPromises).then(function () {
+        resolve();
       });
     });
-    //Si l'enfant à des enfants ... ¯\_(ツ)_/¯, j'aurais du faire une fonction récursive mais
+
   }
+
+
+  private constructor(description: ISceneDesc) {
+    for(let obj in description) {
+      this.scenes[obj] = new Entity();
+      for(let comp in description[obj].components) {
+        this.scenes[obj].addComponent(comp);
+      }
+      //Fonction récursive pour créer les enfants
+      for(let child in description[obj].children) {
+        this.scenes[obj].addChild(child, this.construChildrenRecurse(description[obj].children[child]))
+      }
+    }
+
+  }
+
+
+  //Construit récursivement les enfants
+  construChildrenRecurse(ent: IEntityDesc): IEntity {
+    let entity = new Entity();
+    for(let comp in ent.components) {
+      entity.addComponent(comp);
+    }
+
+    for(let child in ent.children) {
+      entity.addChild(child, this.construChildrenRecurse(ent.children[child]));
+    }
+
+    return entity;
+  }
+
+
+
 
   // ## Fonction *findObject*
   // La fonction *findObject* retourne l'objet de la scène
   // portant le nom spécifié.
   findObject(objectName: string): IEntity {
     let foundObject;
+
     //Si l'objet n'est pas un enfant on peut y accéder directement
-    if(this.scenes[objectName] instanceof Entity) {
-      foundObject = this.scenes[objectName]
+    if(this.scenes[objectName] != undefined) {
+      return this.scenes[objectName];
     } else {
-      //Si pas trouvé dans les objet de la scène ça doit être un enfant
-      //donc on parcours les objets de la scène en vérifiant leurs enfants
-      for (let objName in this.scenes) {
-        if(this.scenes[objName].getChild(objectName) instanceof Entity) foundObject = this.scenes[objName].getChild(objectName);
+      //Sinon on le cherche récursivement dans les enfants des objets, puis leurs enfants etc ...
+      for (let obj in this.scenes) {
+        foundObject = this.findRecurse(objectName, this.scenes[obj] as Entity)
+        if (foundObject != undefined) {
+          return foundObject;
+        }
+      }
+      throw new Error("Did not find the object " + objectName);
+    }
+  }
+
+  //Pour une entitée donnée on parcours récursivement ses enfants
+  findRecurse(objectName:string, ent:Entity): IEntity | undefined {
+    let foundObject;
+    foundObject = ent.getChild(objectName);
+    if(foundObject != undefined) {
+      return foundObject;
+    } else {
+      for(let child in ent.children) {
+        foundObject = this.findRecurse(objectName, ent.children[child] as Entity)
+        if(foundObject != undefined) {
+          return foundObject;
+        }
       }
     }
-    return foundObject as IEntity;
   }
 
   // ## Méthode *walk*
@@ -120,16 +163,20 @@ export class Scene {
   walk(fn: ISceneWalker): Promise<any> {
     let promises = new Array();
 
-    //Pour chaque objet de la scène on applique la fonction fn à ses enfant
-    //grâce à la fonction walkChildren
-    //puis on lui applique la fonction fn
     return new Promise<Scene>((resolve, reject) => {
-      for (let objName in this.scenes) {
+      for (let obj in this.scenes) {
         promises.push(new Promise((resolve, reject) => {
-          this.scenes[objName].walkChildren(fn);
-          fn(this.scenes[objName], objName).then(() => {
+          //On parcours les objets de la scène et on y applique la fonction fn
+          fn(this.scenes[obj], obj).then(() => {
             resolve()
           });
+          //Ensuite on parcours récursivement les enfants de chaque objets pour y appliquer la fonction fn
+          //Je n'utilise pas la fonction walkchildren
+          for(let child in (this.scenes[obj] as Entity).children) {
+            this.walkChildrenRecurse((this.scenes[obj] as Entity).children[child], fn, child).then(() => {
+              resolve()
+            });
+          }
         }));
       }
 
@@ -138,6 +185,19 @@ export class Scene {
       Promise.all(promises).then(function () {
         resolve();
       });
+    });
+  }
+
+  //Fonction récursive pour parcourir les enfants et y appliquer la fonction fn
+  //On renvoie une promesse résolue quand la fonction est terminée
+  walkChildrenRecurse(children: IEntity, fn: ISceneWalker, name: string ): Promise<any> {
+    return new Promise<any>((resolve, reject) => {
+      fn(children, name).then(() => {
+        resolve()
+      });
+      for(let child in (children as Entity).children) {
+        this.walkChildrenRecurse((children as Entity).children[child], fn, child)
+      }
     });
   }
 }
